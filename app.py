@@ -2,7 +2,7 @@ import streamlit as st
 import io
 import base64
 from gtts import gTTS
-from agents import run_agent, SUPERHEROES   # your AI layer
+from Agents import run_agent, SUPERHEROES   # your AI layer
 
 # --- Helper: Text-to-Speech ---
 def text_to_speech(text, lang="en"):
