@@ -1,14 +1,13 @@
 
 import os
 import re
+import traceback
 from typing import List, Optional
 from typing_extensions import TypedDict
 from langgraph.graph import StateGraph, END
-from groq import Groq
-from groq import BadRequestError, AuthenticationError
+from groq import Groq, BadRequestError, AuthenticationError
 
 # --- Groq client setup ---
-# For Streamlit Cloud, add GROQ_API_KEY to secrets (see instructions below)
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 if not GROQ_API_KEY:
     try:
@@ -21,9 +20,9 @@ if not GROQ_API_KEY:
     raise ValueError("GROQ_API_KEY not found. Set it as an environment variable or in Streamlit secrets.")
 
 client = Groq(api_key=GROQ_API_KEY)
-MODEL_NAME = "llama3-8b-8192"  # Free model, fast and reliable
+MODEL_NAME = "llama3-8b-8192"  # Free model
 
-# --- Superhero definitions with aliases for better matching ---
+# --- Superhero definitions ---
 SUPERHEROES = {
     "ironman": {
         "name": "Iron Man",
@@ -47,15 +46,14 @@ SUPERHEROES = {
 
 # --- Graph State ---
 class AgentState(TypedDict):
-    messages: List[dict]          # conversation history
-    current_hero: Optional[str]    # key of active hero
-    call_active: bool              # whether a call is in progress
+    messages: List[dict]
+    current_hero: Optional[str]
+    call_active: bool
 
 # --- Improved hero identification ---
 def identify_superhero(text: str) -> Optional[str]:
     text_lower = text.lower()
-    text_clean = re.sub(r'[^\w\s]', '', text_lower)  # remove punctuation
-    
+    text_clean = re.sub(r'[^\w\s]', '', text_lower)
     for key, hero in SUPERHEROES.items():
         if hero["name"].lower() in text_clean:
             return key
@@ -68,7 +66,6 @@ def identify_superhero(text: str) -> Optional[str]:
 def master_router(state: AgentState) -> AgentState:
     last_msg = state["messages"][-1]["content"]
     hero_key = identify_superhero(last_msg)
-    
     if hero_key:
         state["current_hero"] = hero_key
         state["call_active"] = True
@@ -79,48 +76,53 @@ def master_router(state: AgentState) -> AgentState:
         })
     return state
 
-# --- Superhero Agent Nodes (one per hero) ---
+# --- Superhero Agent Node Factory ---
 def create_hero_node(hero_key: str):
     def hero_node(state: AgentState) -> AgentState:
         hero = SUPERHEROES[hero_key]
         system_msg = {"role": "system", "content": hero["persona"]}
+        # Build conversation history
         conversation = [{"role": m["role"], "content": m["content"]} for m in state["messages"]]
-        messages = [system_msg] + conversation[-10:]  # keep last 10 for context
-        
+        messages = [system_msg] + conversation[-10:]  # last 10 for context
+
+        # --- Call Groq with error logging ---
         try:
+            print(f"Calling Groq with model {MODEL_NAME}, messages count: {len(messages)}")
             chat_completion = client.chat.completions.create(
                 model=MODEL_NAME,
                 messages=messages,
                 temperature=0.7
             )
             reply = chat_completion.choices[0].message.content
-        except AuthenticationError:
+        except AuthenticationError as e:
+            print("AuthenticationError:", str(e))
             reply = "I'm having trouble authenticating. Please check my API key."
         except BadRequestError as e:
-            # Log the error for debugging (visible in Streamlit Cloud logs)
-            print(f"Groq API error: {e}")
+            # Log the full error details
+            print("BadRequestError:", str(e))
+            if hasattr(e, 'response') and e.response is not None:
+                print("Response status:", e.response.status_code)
+                print("Response body:", e.response.text)
             reply = "Sorry, I encountered a technical issue. Please try again."
         except Exception as e:
-            print(f"Unexpected error: {e}")
+            print("Unexpected error:", traceback.format_exc())
             reply = "Sorry, something went wrong. Please try again later."
-        
+
         state["messages"].append({"role": "assistant", "content": reply})
         return state
     return hero_node
 
-# Create individual hero nodes
+# Create hero nodes
 ironman_node = create_hero_node("ironman")
 spiderman_node = create_hero_node("spiderman")
 captainamerica_node = create_hero_node("captainamerica")
 
-# --- Build the Graph ---
+# --- Build Graph ---
 builder = StateGraph(AgentState)
-
 builder.add_node("master_router", master_router)
 builder.add_node("ironman", ironman_node)
 builder.add_node("spiderman", spiderman_node)
 builder.add_node("captainamerica", captainamerica_node)
-
 builder.set_entry_point("master_router")
 
 def route_to_hero(state: AgentState) -> str:
@@ -130,14 +132,13 @@ def route_to_hero(state: AgentState) -> str:
         return END
 
 builder.add_conditional_edges("master_router", route_to_hero)
-
 builder.add_edge("ironman", "master_router")
 builder.add_edge("spiderman", "master_router")
 builder.add_edge("captainamerica", "master_router")
 
 graph = builder.compile()
 
-# --- Public interface for Streamlit ---
+# --- Public interface ---
 def run_agent(user_input: str, state: AgentState) -> AgentState:
     if "messages" not in state:
         state["messages"] = []
