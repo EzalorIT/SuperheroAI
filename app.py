@@ -1,5 +1,5 @@
 import streamlit as st
-from agents import run_agent, SUPERHEROES   # import from your AI layer
+from Agents import run_agent, SUPERHEROES   # import from your AI layer
 
 # Add animation paths to SUPERHEROES (or define separately)
 # For this example, we'll extend the dictionary locally
