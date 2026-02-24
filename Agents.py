@@ -20,7 +20,7 @@ if not GROQ_API_KEY:
     raise ValueError("GROQ_API_KEY not found. Set it as an environment variable or in Streamlit secrets.")
 
 client = Groq(api_key=GROQ_API_KEY)
-MODEL_NAME = "mixtral-8x7b-32768"
+MODEL_NAME = "llama-3.3-70b-versatile"
 
 # --- Superhero definitions ---
 SUPERHEROES = {
