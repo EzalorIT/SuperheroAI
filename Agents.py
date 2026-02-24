@@ -4,7 +4,6 @@ from typing import List, Optional
 from typing_extensions import TypedDict
 from langgraph.graph import StateGraph, END
 import google.generativeai as genai
-from google.generativeai import types
 
 # --- Gemini setup ---
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
@@ -75,23 +74,20 @@ def master_router(state: AgentState) -> AgentState:
         })
     return state
 
-# --- Superhero Node Factory (Gemini version with correct formatting) ---
+# --- Superhero Node Factory (Gemini version with dict history) ---
 def create_hero_node(hero_key: str):
     def hero_node(state: AgentState) -> AgentState:
         hero = SUPERHEROES[hero_key]
         
-        # Convert conversation history to Gemini's Content format
-        # All messages except the last one are history
+        # Build history as list of dicts with 'role' and 'parts'
         history = []
-        for msg in state["messages"][:-1]:
+        for msg in state["messages"][:-1]:  # all except last
             role = "user" if msg["role"] == "user" else "model"
-            content = types.Content(
-                parts=[types.Part(text=msg["content"])],
-                role=role
-            )
-            history.append(content)
+            history.append({
+                "role": role,
+                "parts": [{"text": msg["content"]}]
+            })
         
-        # The last message is the new user input
         last_user_message = state["messages"][-1]["content"]
         
         # Create model with system instruction
