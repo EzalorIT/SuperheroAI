@@ -1,11 +1,13 @@
 import os
-import google.generativeai as genai
+import re
 from typing import List, Optional
 from typing_extensions import TypedDict
 from langgraph.graph import StateGraph, END
+import google.generativeai as genai
+from google.generativeai import types
 
 # --- Gemini setup ---
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")  # Get from aistudio.google.com
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 if not GOOGLE_API_KEY:
     try:
         import streamlit as st
@@ -19,7 +21,7 @@ if not GOOGLE_API_KEY:
 genai.configure(api_key=GOOGLE_API_KEY)
 MODEL_NAME = "gemini-2.0-flash"  # Fast, free, high limits
 
-# --- Superhero definitions (same as before) ---
+# --- Superhero definitions ---
 SUPERHEROES = {
     "ironman": {
         "name": "Iron Man",
@@ -47,10 +49,9 @@ class AgentState(TypedDict):
     current_hero: Optional[str]
     call_active: bool
 
-# --- Helper: Identify hero (unchanged) ---
+# --- Helper: Identify hero from user message ---
 def identify_superhero(text: str) -> Optional[str]:
     text_lower = text.lower()
-    import re
     text_clean = re.sub(r'[^\w\s]', '', text_lower)
     for key, hero in SUPERHEROES.items():
         if hero["name"].lower() in text_clean:
@@ -60,7 +61,7 @@ def identify_superhero(text: str) -> Optional[str]:
                 return key
     return None
 
-# --- Master Router Node (unchanged) ---
+# --- Master Router Node ---
 def master_router(state: AgentState) -> AgentState:
     last_msg = state["messages"][-1]["content"]
     hero_key = identify_superhero(last_msg)
@@ -74,44 +75,53 @@ def master_router(state: AgentState) -> AgentState:
         })
     return state
 
-# --- Superhero Node Factory (UPDATED for Gemini) ---
+# --- Superhero Node Factory (Gemini version with correct formatting) ---
 def create_hero_node(hero_key: str):
     def hero_node(state: AgentState) -> AgentState:
         hero = SUPERHEROES[hero_key]
         
-        # Build conversation history for Gemini
-        conversation = []
-        for msg in state["messages"][-10:]:  # last 10 messages
+        # Convert conversation history to Gemini's Content format
+        # All messages except the last one are history
+        history = []
+        for msg in state["messages"][:-1]:
             role = "user" if msg["role"] == "user" else "model"
-            conversation.append({"role": role, "content": msg["content"]})
+            content = types.Content(
+                parts=[types.Part(text=msg["content"])],
+                role=role
+            )
+            history.append(content)
         
-        # Create the model with system prompt
+        # The last message is the new user input
+        last_user_message = state["messages"][-1]["content"]
+        
+        # Create model with system instruction
         model = genai.GenerativeModel(
             MODEL_NAME,
             system_instruction=hero["persona"]
         )
         
         # Start chat with history
-        chat = model.start_chat(history=conversation[:-1])  # all but last
+        chat = model.start_chat(history=history)
         
         try:
-            # Send the last user message
-            response = chat.send_message(conversation[-1]["content"])
+            # Send the new message
+            response = chat.send_message(last_user_message)
             reply = response.text
         except Exception as e:
             print(f"Gemini error: {e}")
             reply = "Sorry, I encountered an issue. Please try again."
         
+        # Append the assistant's reply to state
         state["messages"].append({"role": "assistant", "content": reply})
         return state
     return hero_node
 
-# Create hero nodes
+# Create individual hero nodes
 ironman_node = create_hero_node("ironman")
 spiderman_node = create_hero_node("spiderman")
 captainamerica_node = create_hero_node("captainamerica")
 
-# --- Build Graph (unchanged) ---
+# --- Build Graph ---
 builder = StateGraph(AgentState)
 builder.add_node("master_router", master_router)
 builder.add_node("ironman", ironman_node)
@@ -136,4 +146,5 @@ def run_agent(user_input: str, state: AgentState) -> AgentState:
     if "messages" not in state:
         state["messages"] = []
     state["messages"].append({"role": "user", "content": user_input})
-    return graph.invoke(state)
+    new_state = graph.invoke(state)
+    return new_state
