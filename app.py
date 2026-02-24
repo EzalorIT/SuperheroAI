@@ -1,121 +1,84 @@
-import os
-from typing import List, Optional, Literal
-from typing_extensions import TypedDict
-from langgraph.graph import StateGraph, END
-from groq import Groq  # <-- Import Groq
+import streamlit as st
+from Agents import run_agent, SUPERHEROES   # import from your AI layer
 
-# --- Groq client setup ---
-# Best practice: store API key in environment variable or Streamlit secrets
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")  # or st.secrets["GROQ_API_KEY"] if using Streamlit
-if not GROQ_API_KEY:
-    raise ValueError("Please set GROQ_API_KEY environment variable")
-
-client = Groq(api_key=GROQ_API_KEY)
-MODEL_NAME = "llama3-8b-8192"  # Free model, fast and capable
-
-# --- Superhero definitions ---
-SUPERHEROES = {
-    "ironman": {
-        "name": "Iron Man",
-        "persona": "You are Tony Stark, billionaire genius in a high‑tech suit. Witty, sarcastic, but always ready to help.",
-        "image": "https://via.placeholder.com/400?text=Iron+Man"
-    },
-    "spiderman": {
-        "name": "Spider-Man",
-        "persona": "You are Peter Parker, a friendly neighbourhood Spider‑Man. Energetic, a bit nervous, but heroic.",
-        "image": "https://via.placeholder.com/400?text=Spider-Man"
-    },
-    "captainamerica": {
-        "name": "Captain America",
-        "persona": "You are Steve Rogers, Captain America. Honest, brave, and always speaks with moral clarity.",
-        "image": "https://via.placeholder.com/400?text=Captain+America"
-    }
+# Add animation paths to SUPERHEROES (or define separately)
+# For this example, we'll extend the dictionary locally
+HERO_MEDIA = {
+    "ironman": "assets/ironman.gif",          # or .mp4
+    "spiderman": "assets/spiderman.gif",
+    "captainamerica": "assets/captainamerica.gif"
 }
 
-# --- Graph State ---
-class AgentState(TypedDict):
-    messages: List[dict]          # conversation history
-    current_hero: Optional[str]    # key of active hero
-    call_active: bool              # whether a call is in progress
+# Function to display animated video
+def display_hero_animation(hero_key):
+    media_path = HERO_MEDIA.get(hero_key)
+    if not media_path:
+        # Fallback to static image if no animation found
+        st.image(SUPERHEROES[hero_key]["image"], use_container_width=True)
+        return
 
-# --- Helper: Identify hero from user message ---
-def identify_superhero(text: str) -> Optional[str]:
-    text_lower = text.lower()
-    for key, hero in SUPERHEROES.items():
-        if hero["name"].lower() in text_lower:
-            return key
-    return None
-
-# --- Master Router Node ---
-def master_router(state: AgentState) -> AgentState:
-    last_msg = state["messages"][-1]["content"]
-    hero_key = identify_superhero(last_msg)
-    
-    if hero_key:
-        state["current_hero"] = hero_key
-        state["call_active"] = True
+    # Check file extension
+    if media_path.endswith('.gif'):
+        st.image(media_path, use_container_width=True)
+    elif media_path.endswith(('.mp4', '.webm', '.ogg')):
+        # Embed HTML5 video with autoplay and loop
+        video_html = f"""
+        <video width="100%" autoplay loop muted>
+            <source src="{media_path}" type="video/mp4">
+            Your browser does not support the video tag.
+        </video>
+        """
+        st.components.v1.html(video_html, height=400)  # adjust height as needed
     else:
-        state["messages"].append({
-            "role": "assistant",
-            "content": "I'm not sure which hero you'd like to call. Please say, for example, 'I want to talk to Iron Man'."
-        })
-    return state
+        # Fallback to static image
+        st.image(SUPERHEROES[hero_key]["image"], use_container_width=True)
 
-# --- Superhero Agent Nodes (one per hero) ---
-def create_hero_node(hero_key: str):
-    """Factory to create a node function for a specific superhero."""
-    def hero_node(state: AgentState) -> AgentState:
-        hero = SUPERHEROES[hero_key]
-        # Build messages for Groq
-        system_msg = {"role": "system", "content": hero["persona"]}
-        conversation = [{"role": m["role"], "content": m["content"]} for m in state["messages"]]
-        messages = [system_msg] + conversation[-10:]  # keep last 10 for context
-        
-        # Call Groq
-        chat_completion = client.chat.completions.create(
-            model=MODEL_NAME,
-            messages=messages,
-            temperature=0.7
-        )
-        reply = chat_completion.choices[0].message.content
-        
-        state["messages"].append({"role": "assistant", "content": reply})
-        return state
-    return hero_node
+# Streamlit UI
+st.set_page_config(page_title="Superhero Video Call", layout="wide")
+st.title("🦸‍♂️ Animated Superhero Video Call")
 
-# Create individual hero nodes
-ironman_node = create_hero_node("ironman")
-spiderman_node = create_hero_node("spiderman")
-captainamerica_node = create_hero_node("captainamerica")
+# Sidebar with available heroes
+st.sidebar.header("Available Heroes")
+for hero in SUPERHEROES.values():
+    st.sidebar.write(f"- {hero['name']}")
 
-# --- Build the Graph ---
-builder = StateGraph(AgentState)
+# Initialize agent state
+if "agent_state" not in st.session_state:
+    st.session_state.agent_state = {
+        "messages": [],
+        "current_hero": None,
+        "call_active": False
+    }
 
-builder.add_node("master_router", master_router)
-builder.add_node("ironman", ironman_node)
-builder.add_node("spiderman", spiderman_node)
-builder.add_node("captainamerica", captainamerica_node)
+col1, col2 = st.columns([1, 1])
 
-builder.set_entry_point("master_router")
-
-def route_to_hero(state: AgentState) -> Literal["ironman", "spiderman", "captainamerica", "END"]:
-    if state["call_active"] and state["current_hero"]:
-        return state["current_hero"]
+with col1:
+    st.subheader("Video Feed")
+    if st.session_state.agent_state["current_hero"]:
+        hero_key = st.session_state.agent_state["current_hero"]
+        display_hero_animation(hero_key)
     else:
-        return END
+        st.info("No active call. Type a message to start!")
 
-builder.add_conditional_edges("master_router", route_to_hero)
+with col2:
+    st.subheader("Chat")
+    for msg in st.session_state.agent_state["messages"]:
+        with st.chat_message(msg["role"]):
+            st.write(msg["content"])
 
-builder.add_edge("ironman", "master_router")
-builder.add_edge("spiderman", "master_router")
-builder.add_edge("captainamerica", "master_router")
+# Chat input
+if prompt := st.chat_input("Your message..."):
+    with st.spinner("Thinking..."):
+        new_state = run_agent(prompt, st.session_state.agent_state)
+    st.session_state.agent_state = new_state
+    st.rerun()
 
-graph = builder.compile()
-
-# --- Public interface for Streamlit ---
-def run_agent(user_input: str, state: AgentState) -> AgentState:
-    if "messages" not in state:
-        state["messages"] = []
-    state["messages"].append({"role": "user", "content": user_input})
-    new_state = graph.invoke(state)
-    return new_state
+# End call button
+if st.session_state.agent_state["call_active"]:
+    if st.button("End Call"):
+        st.session_state.agent_state = {
+            "messages": [],
+            "current_hero": None,
+            "call_active": False
+        }
+        st.rerun()
