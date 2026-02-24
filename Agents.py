@@ -1,12 +1,11 @@
 import os
-from typing import List, Optional, Literal
+from typing import List, Optional, Union
 from typing_extensions import TypedDict
 from langgraph.graph import StateGraph, END
-from groq import Groq  # <-- Import Groq
+from groq import Groq
 
 # --- Groq client setup ---
-# Best practice: store API key in environment variable or Streamlit secrets
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")  # or st.secrets["GROQ_API_KEY"] if using Streamlit
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")  # or use st.secrets in Streamlit
 if not GROQ_API_KEY:
     raise ValueError("Please set GROQ_API_KEY environment variable")
 
@@ -98,14 +97,16 @@ builder.add_node("captainamerica", captainamerica_node)
 
 builder.set_entry_point("master_router")
 
-def route_to_hero(state: AgentState) -> Literal["ironman", "spiderman", "captainamerica", "END"]:
+def route_to_hero(state: AgentState) -> str:
+    """Return the next node name or END."""
     if state["call_active"] and state["current_hero"]:
-        return state["current_hero"]
+        return state["current_hero"]   # node name matches hero key
     else:
-        return END
+        return END   # END is the special constant "__end__"
 
 builder.add_conditional_edges("master_router", route_to_hero)
 
+# After a hero responds, go back to master router to handle next user input
 builder.add_edge("ironman", "master_router")
 builder.add_edge("spiderman", "master_router")
 builder.add_edge("captainamerica", "master_router")
