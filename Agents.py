@@ -1,12 +1,17 @@
-import openai
+import os
 from typing import List, Optional, Literal
 from typing_extensions import TypedDict
 from langgraph.graph import StateGraph, END
+from groq import Groq  # <-- Import Groq
 
-# --- Configuration for free model (Ollama) ---
-openai.api_base = "http://localhost:11434/v1"
-openai.api_key = "dummy"
-MODEL_NAME = "llama3.2"   # or any model you pulled
+# --- Groq client setup ---
+# Best practice: store API key in environment variable or Streamlit secrets
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")  # or st.secrets["GROQ_API_KEY"] if using Streamlit
+if not GROQ_API_KEY:
+    raise ValueError("Please set GROQ_API_KEY environment variable")
+
+client = Groq(api_key=GROQ_API_KEY)
+MODEL_NAME = "llama3-8b-8192"  # Free model, fast and capable
 
 # --- Superhero definitions ---
 SUPERHEROES = {
@@ -29,8 +34,8 @@ SUPERHEROES = {
 
 # --- Graph State ---
 class AgentState(TypedDict):
-    messages: List[dict]          # conversation history [{"role": "user"/"assistant", "content": ...}]
-    current_hero: Optional[str]    # key of active hero (None if no call)
+    messages: List[dict]          # conversation history
+    current_hero: Optional[str]    # key of active hero
     call_active: bool              # whether a call is in progress
 
 # --- Helper: Identify hero from user message ---
@@ -43,18 +48,13 @@ def identify_superhero(text: str) -> Optional[str]:
 
 # --- Master Router Node ---
 def master_router(state: AgentState) -> AgentState:
-    # Get the last user message
     last_msg = state["messages"][-1]["content"]
     hero_key = identify_superhero(last_msg)
     
     if hero_key:
-        # If a hero is mentioned, activate the call (or switch heroes)
         state["current_hero"] = hero_key
         state["call_active"] = True
-        # No need to greet here; the hero agent will respond.
-        # We'll let the hero agent generate the greeting.
     else:
-        # If no hero identified, ask for clarification
         state["messages"].append({
             "role": "assistant",
             "content": "I'm not sure which hero you'd like to call. Please say, for example, 'I want to talk to Iron Man'."
@@ -66,22 +66,19 @@ def create_hero_node(hero_key: str):
     """Factory to create a node function for a specific superhero."""
     def hero_node(state: AgentState) -> AgentState:
         hero = SUPERHEROES[hero_key]
-        # Build messages for the LLM
+        # Build messages for Groq
         system_msg = {"role": "system", "content": hero["persona"]}
-        # Convert state messages to the format expected by the LLM
         conversation = [{"role": m["role"], "content": m["content"]} for m in state["messages"]]
-        # Keep last 10 messages for context
-        messages = [system_msg] + conversation[-10:]
+        messages = [system_msg] + conversation[-10:]  # keep last 10 for context
         
-        # Call the LLM
-        response = openai.ChatCompletion.create(
+        # Call Groq
+        chat_completion = client.chat.completions.create(
             model=MODEL_NAME,
             messages=messages,
             temperature=0.7
         )
-        reply = response.choices[0].message.content
+        reply = chat_completion.choices[0].message.content
         
-        # Append the reply to state
         state["messages"].append({"role": "assistant", "content": reply})
         return state
     return hero_node
@@ -94,43 +91,31 @@ captainamerica_node = create_hero_node("captainamerica")
 # --- Build the Graph ---
 builder = StateGraph(AgentState)
 
-# Add nodes
 builder.add_node("master_router", master_router)
 builder.add_node("ironman", ironman_node)
 builder.add_node("spiderman", spiderman_node)
 builder.add_node("captainamerica", captainamerica_node)
 
-# Set entry point
 builder.set_entry_point("master_router")
 
-# Conditional edges from master_router
-def route_to_hero(state: AgentState) -> Literal["ironman", "spiderman", "captainamerica", "end"]:
+def route_to_hero(state: AgentState) -> Literal["ironman", "spiderman", "captainamerica", "END"]:
     if state["call_active"] and state["current_hero"]:
-        return state["current_hero"]   # node name matches hero key
-    elif not state["call_active"]:
-        # No hero identified, end this run (wait for next user input)
-        return "end"
+        return state["current_hero"]
     else:
-        # Should not happen, but fallback
-        return "end"
+        return END
 
 builder.add_conditional_edges("master_router", route_to_hero)
 
-# After a hero responds, go back to master router to handle next user input
 builder.add_edge("ironman", "master_router")
 builder.add_edge("spiderman", "master_router")
 builder.add_edge("captainamerica", "master_router")
 
-# Compile
 graph = builder.compile()
 
 # --- Public interface for Streamlit ---
 def run_agent(user_input: str, state: AgentState) -> AgentState:
-    # Append user message
     if "messages" not in state:
         state["messages"] = []
     state["messages"].append({"role": "user", "content": user_input})
-    
-    # Run the graph
     new_state = graph.invoke(state)
     return new_state
