@@ -1,3 +1,4 @@
+
 import os
 import re
 from typing import List, Optional
@@ -7,10 +8,9 @@ from groq import Groq
 from groq import BadRequestError, AuthenticationError
 
 # --- Groq client setup ---
-# For Streamlit Cloud, set GROQ_API_KEY in secrets (see below)
+# For Streamlit Cloud, add GROQ_API_KEY to secrets (see instructions below)
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 if not GROQ_API_KEY:
-    # Fallback: try to get from Streamlit secrets if running in Streamlit
     try:
         import streamlit as st
         GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
@@ -21,16 +21,15 @@ if not GROQ_API_KEY:
     raise ValueError("GROQ_API_KEY not found. Set it as an environment variable or in Streamlit secrets.")
 
 client = Groq(api_key=GROQ_API_KEY)
-# Use a reliable free model
-MODEL_NAME = "llama3-8b-8192"  # Fast, free, and always available
+MODEL_NAME = "llama3-8b-8192"  # Free model, fast and reliable
 
-# --- Superhero definitions ---
+# --- Superhero definitions with aliases for better matching ---
 SUPERHEROES = {
     "ironman": {
         "name": "Iron Man",
         "persona": "You are Tony Stark, billionaire genius in a high‑tech suit. Witty, sarcastic, but always ready to help.",
         "image": "https://via.placeholder.com/400?text=Iron+Man",
-        "aliases": ["iron man", "tony stark", "stark"]  # for better matching
+        "aliases": ["iron man", "tony stark", "stark"]
     },
     "spiderman": {
         "name": "Spider-Man",
@@ -48,22 +47,18 @@ SUPERHEROES = {
 
 # --- Graph State ---
 class AgentState(TypedDict):
-    messages: List[dict]          # conversation history [{"role": "user"/"assistant", "content": ...}]
-    current_hero: Optional[str]    # key of active hero (None if no call)
+    messages: List[dict]          # conversation history
+    current_hero: Optional[str]    # key of active hero
     call_active: bool              # whether a call is in progress
 
-# --- Helper: Identify hero from user message (improved) ---
+# --- Improved hero identification ---
 def identify_superhero(text: str) -> Optional[str]:
-    """Return hero key if any hero name or alias is mentioned in text."""
     text_lower = text.lower()
-    # Remove punctuation for better matching
-    text_clean = re.sub(r'[^\w\s]', '', text_lower)
+    text_clean = re.sub(r'[^\w\s]', '', text_lower)  # remove punctuation
     
     for key, hero in SUPERHEROES.items():
-        # Check official name
         if hero["name"].lower() in text_clean:
             return key
-        # Check aliases
         for alias in hero.get("aliases", []):
             if alias in text_clean:
                 return key
@@ -86,10 +81,8 @@ def master_router(state: AgentState) -> AgentState:
 
 # --- Superhero Agent Nodes (one per hero) ---
 def create_hero_node(hero_key: str):
-    """Factory to create a node function for a specific superhero."""
     def hero_node(state: AgentState) -> AgentState:
         hero = SUPERHEROES[hero_key]
-        # Build messages for Groq
         system_msg = {"role": "system", "content": hero["persona"]}
         conversation = [{"role": m["role"], "content": m["content"]} for m in state["messages"]]
         messages = [system_msg] + conversation[-10:]  # keep last 10 for context
@@ -104,7 +97,7 @@ def create_hero_node(hero_key: str):
         except AuthenticationError:
             reply = "I'm having trouble authenticating. Please check my API key."
         except BadRequestError as e:
-            # Log the error for debugging (optional)
+            # Log the error for debugging (visible in Streamlit Cloud logs)
             print(f"Groq API error: {e}")
             reply = "Sorry, I encountered a technical issue. Please try again."
         except Exception as e:
@@ -131,15 +124,13 @@ builder.add_node("captainamerica", captainamerica_node)
 builder.set_entry_point("master_router")
 
 def route_to_hero(state: AgentState) -> str:
-    """Return the next node name or END."""
     if state["call_active"] and state["current_hero"]:
-        return state["current_hero"]   # node name matches hero key
+        return state["current_hero"]
     else:
         return END
 
 builder.add_conditional_edges("master_router", route_to_hero)
 
-# After a hero responds, go back to master router to handle next user input
 builder.add_edge("ironman", "master_router")
 builder.add_edge("spiderman", "master_router")
 builder.add_edge("captainamerica", "master_router")
